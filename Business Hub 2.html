@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> CMHS Business Department Lesson Plan Hub</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Quill Rich Text Editor CSS from a more reliable CDN -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.6/quill.snow.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .bg-custom-gradient {
+            background-image: linear-gradient(to right, #6EE7B7, #3B82F6);
+        }
+        /* Quill Editor styles */
+        #editor-container {
+            height: 250px;
+            background-color: white;
+            border-radius: 0.375rem; /* rounded-md */
+            border: 1px solid #D1D5DB; /* border-gray-300 */
+        }
+        #editor-container .ql-container {
+            border: none;
+            font-size: 1rem;
+            line-height: 1.5;
+            padding: 1rem;
+        }
+        .ql-toolbar.ql-snow {
+            border-radius: 0.375rem; /* rounded-md */
+            border: 1px solid #D1D5DB; /* border-gray-300 */
+            border-bottom: none;
+        }
+        /* Custom image resize handle styles for Quill */
+        .ql-snow .ql-editor img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 0.375rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Main Container -->
+    <div id="app-container" class="bg-white rounded-xl shadow-lg w-full max-w-4xl p-8 space-y-6">
+
+        <!-- Header -->
+        <header class="text-center space-y-2">
+            <h1 class="text-4xl font-extrabold text-gray-800"> CMHS Business Department Lesson Plan Hub</h1>
+            <p id="auth-status" class="text-gray-500 text-sm italic"></p>
+        </header>
+
+        <!-- Loading State -->
+        <div id="loading-state" class="flex flex-col items-center justify-center space-y-4">
+            <div class="animate-spin rounded-full h-12 w-12 border-4 border-t-blue-500 border-gray-200"></div>
+            <p class="text-gray-600">Loading...</p>
+        </div>
+
+        <!-- Role-based content will be rendered here -->
+        <div id="content-container"></div>
+
+    </div>
+
+    <!-- Modals and dynamic content will be rendered here -->
+    <div id="modal-container"></div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, onSnapshot, collection, query, where, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        
+        // Quill is now loaded via a script tag, so we can access it globally.
+
+        // Set Firebase debug level
+        setLogLevel('debug');
+
+        const appId = "lesson-plan-hub";
+        const firebaseConfig = {
+            apiKey: "AIzaSyD_ci25Ktcne6aVlcb-X8a7mmjr2aif7QU",
+            authDomain: "lesson-plan-hub.firebaseapp.com",
+            projectId: "lesson-plan-hub",
+            storageBucket: "lesson-plan-hub.firebasestorage.app",
+            messagingSenderId: "93838846032",
+            appId: "1:9383846032:web:b332ac30072ffe0becc955",
+            measurementId: "G-7F3Q7L00HY"
+        };
+        
+        let db;
+        let auth;
+        let storage;
+        let currentUserId;
+        let hodUserId = 'hod-not-set'; // A placeholder for the HOD's UID
+        let isHod = false;
+
+        // UI elements
+        const loadingStateEl = document.getElementById('loading-state');
+        const contentContainerEl = document.getElementById('content-container');
+        const authStatusEl = document.getElementById('auth-status');
+        const modalContainerEl = document.getElementById('modal-container');
+
+        // State management
+        let state = {
+            view: 'loading', // 'loading', 'dashboard', 'submit', 'viewPlan', 'auth', 'evaluate'
+            selectedPlanId: null,
+            lessonPlans: [],
+            filteredPlans: []
+        };
+        let quillEditor = null;
+        const subjectIcons = {
+            'business': '💼',
+            'science': '🔬',
+            'math': '➕',
+            'history': '📜',
+            'english': '✍️',
+            'art': '🎨',
+            'default': '📚'
+        };
+
+        // --- Core Application Logic ---
+
+        // Renders an error message for the user
+        const renderError = (message) => {
+            loadingStateEl.classList.add('hidden');
+            contentContainerEl.innerHTML = `
+                <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+                    <strong class="font-bold">Error!</strong>
+                    <span class="block sm:inline">${message}</span>
+                </div>
+            `;
+        };
+
+        const setupAuthAndRender = async () => {
+            if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+                renderError('Firebase configuration is missing. Please add your Firebase project details to the `firebaseConfig` variable in the code.');
+                return;
+            }
+
+            try {
+                // Initialize Firebase
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                storage = getStorage(app);
+
+            } catch (error) {
+                console.error("Firebase auth error:", error);
+                renderError(`Firebase auth error: ${error.message}. Please check your configuration.`);
+                return;
+            }
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    currentUserId = user.uid;
+                    authStatusEl.innerHTML = `User ID: <span class="font-mono text-gray-800">${currentUserId}</span><br>
+                        <button id="logout-btn" class="text-xs text-blue-500 hover:underline mt-1">Log Out</button>`;
+                    document.getElementById('logout-btn').addEventListener('click', () => {
+                        signOut(auth);
+                    });
+
+                    try {
+                        // Get the HOD ID from Firestore
+                        const userDocRef = doc(db, `/artifacts/${appId}/public/data/users`, 'metadata');
+                        const userDocSnap = await getDoc(userDocRef);
+
+                        // Check if the metadata document exists
+                        if (!userDocSnap.exists()) {
+                            // If not, this is the first user. Create the document and set them as HOD.
+                            await setDoc(userDocRef, { hodId: currentUserId });
+                            console.log("HOD role assigned to first user.");
+                            hodUserId = currentUserId;
+                        } else {
+                            // If it exists, retrieve the HOD ID
+                            hodUserId = userDocSnap.data().hodId;
+                        }
+
+                    } catch (e) {
+                        console.error("Firestore initialization error: ", e);
+                    } finally {
+                        isHod = (currentUserId === hodUserId);
+                        state.view = 'dashboard';
+                        render();
+                    }
+                } else {
+                    console.log("User is signed out.");
+                    currentUserId = null;
+                    authStatusEl.textContent = "";
+                    state.view = 'auth';
+                    render();
+                }
+            });
+        };
+
+        // Firestore collection reference
+        const getLessonPlansCollectionRef = () => {
+            return collection(db, `/artifacts/${appId}/public/data/lessons`);
+        };
+
+        // Renders the main view based on the current state
+        const render = () => {
+            loadingStateEl.classList.add('hidden');
+            contentContainerEl.innerHTML = '';
+            
+            switch (state.view) {
+                case 'dashboard':
+                    renderDashboard();
+                    break;
+                case 'submit':
+                    renderSubmitForm();
+                    break;
+                case 'viewPlan':
+                    renderViewPlan();
+                    break;
+                case 'auth':
+                    renderAuthForm();
+                    break;
+                case 'evaluate':
+                    renderEvaluationForm();
+                    break;
+                default:
+                    loadingStateEl.classList.remove('hidden');
+            }
+        };
+
+        const renderAuthForm = () => {
+            contentContainerEl.innerHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-3xl font-bold text-gray-700 text-center">Sign In or Sign Up</h2>
+                    <form id="auth-form" class="space-y-4">
+                        <div>
+                            <label for="email" class="block text-sm font-medium text-gray-700">Email Address</label>
+                            <input type="email" id="email" name="email" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                            <input type="password" id="password" name="password" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        </div>
+                        <div class="flex items-center">
+                            <input type="checkbox" id="remember-me" name="remember-me" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                            <label for="remember-me" class="ml-2 block text-sm text-gray-900">Remember me</label>
+                        </div>
+                        <div class="flex space-x-4">
+                            <button type="button" id="login-btn" class="w-1/2 bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                                Log In
+                            </button>
+                            <button type="button" id="signup-btn" class="w-1/2 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                                Sign Up
+                            </button>
+                        </div>
+                    </form>
+                    <button id="anon-login-btn" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg transition-colors">
+                        Continue as Anonymous User
+                    </button>
+                    <p id="auth-error" class="text-red-500 text-center"></p>
+                </div>
+            `;
+
+            document.getElementById('login-btn').addEventListener('click', async () => {
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                const rememberMe = document.getElementById('remember-me').checked;
+                const persistence = rememberMe ? browserLocalPersistence : browserSessionPersistence;
+                
+                try {
+                    await setPersistence(auth, persistence);
+                    await signInWithEmailAndPassword(auth, email, password);
+                } catch (error) {
+                    document.getElementById('auth-error').textContent = error.message;
+                }
+            });
+
+            document.getElementById('signup-btn').addEventListener('click', async () => {
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                const rememberMe = document.getElementById('remember-me').checked;
+                const persistence = rememberMe ? browserLocalPersistence : browserSessionPersistence;
+
+                try {
+                    await setPersistence(auth, persistence);
+                    await createUserWithEmailAndPassword(auth, email, password);
+                } catch (error) {
+                    document.getElementById('auth-error').textContent = error.message;
+                }
+            });
+
+            document.getElementById('anon-login-btn').addEventListener('click', async () => {
+                const rememberMe = document.getElementById('remember-me').checked;
+                const persistence = rememberMe ? browserLocalPersistence : browserSessionPersistence;
+                
+                try {
+                    await setPersistence(auth, persistence);
+                    await signInAnonymously(auth);
+                } catch (error) {
+                     document.getElementById('auth-error').textContent = error.message;
+                }
+            });
+        };
+
+        const renderDashboard = () => {
+            if (isHod) {
+                renderHodDashboard();
+            } else {
+                renderTeacherDashboard();
+            }
+        };
+
+        const filterAndRenderPlans = (query) => {
+            const listEl = document.getElementById('lesson-plans-list');
+            if (!listEl) return;
+
+            const lowerQuery = query.toLowerCase();
+            state.filteredPlans = state.lessonPlans.filter(plan =>
+                plan.title.toLowerCase().includes(lowerQuery) ||
+                plan.teacherName.toLowerCase().includes(lowerQuery) ||
+                plan.teacherSubject.toLowerCase().includes(lowerQuery)
+            );
+
+            listEl.innerHTML = ''; // Clear previous list
+            if (state.filteredPlans.length === 0) {
+                listEl.innerHTML = `<p class="text-gray-500">No matching lesson plans found.</p>`;
+                return;
+            }
+
+            state.filteredPlans.forEach(plan => {
+                const planCard = createPlanCard(plan);
+                listEl.appendChild(planCard);
+            });
+        };
+
+        const renderHodDashboard = () => {
+            contentContainerEl.innerHTML = `
+                <div class="space-y-4">
+                    <h2 class="text-3xl font-bold text-gray-700">HOD Dashboard</h2>
+                    <p class="text-gray-600">Viewing all lesson plans submitted by the department.</p>
+                    <input type="text" id="search-input" placeholder="Search plans by title, teacher, or subject..." class="w-full p-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    <div id="lesson-plans-list" class="space-y-4">
+                        <!-- Lesson plans will be loaded here -->
+                        <p class="text-gray-500">Loading lesson plans...</p>
+                    </div>
+                </div>
+            `;
+            const searchInputEl = document.getElementById('search-input');
+            searchInputEl.addEventListener('input', (e) => filterAndRenderPlans(e.target.value));
+
+            const q = query(getLessonPlansCollectionRef());
+            onSnapshot(q, (snapshot) => {
+                try {
+                    state.lessonPlans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    state.lessonPlans.sort((a, b) => b.timestamp - a.timestamp); // Sort data in memory
+                    filterAndRenderPlans(searchInputEl.value);
+                } catch (e) {
+                    console.error("Error fetching lesson plans: ", e);
+                    document.getElementById('lesson-plans-list').innerHTML = `<p class="text-red-500">An error occurred while loading lesson plans.</p>`;
+                }
+            });
+        };
+
+        const renderTeacherDashboard = () => {
+            contentContainerEl.innerHTML = `
+                <div class="space-y-4">
+                    <h2 class="text-3xl font-bold text-gray-700">Teacher Dashboard</h2>
+                    <p class="text-gray-600">Your submitted lesson plans.</p>
+                    <button id="submit-btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                        Submit a New Lesson Plan
+                    </button>
+                    <input type="text" id="search-input" placeholder="Search your plans..." class="w-full p-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 mt-4">
+                    <div id="lesson-plans-list" class="space-y-4">
+                        <!-- Lesson plans will be loaded here -->
+                        <p class="text-gray-500">Loading your lesson plans...</p>
+                    </div>
+                </div>
+            `;
+            document.getElementById('submit-btn').addEventListener('click', () => {
+                state.view = 'submit';
+                // Clear selected plan ID to indicate a new submission
+                state.selectedPlanId = null;
+                render();
+            });
+
+            const searchInputEl = document.getElementById('search-input');
+            searchInputEl.addEventListener('input', (e) => filterAndRenderPlans(e.target.value));
+
+            const q = query(getLessonPlansCollectionRef(), where('userId', '==', currentUserId));
+            onSnapshot(q, (snapshot) => {
+                try {
+                    state.lessonPlans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    state.lessonPlans.sort((a, b) => b.timestamp - a.timestamp); // Sort data in memory
+                    filterAndRenderPlans(searchInputEl.value);
+                } catch (e) {
+                    console.error("Error fetching user's lesson plans: ", e);
+                    document.getElementById('lesson-plans-list').innerHTML = `<p class="text-red-500">An error occurred while loading your lesson plans.</p>`;
+                }
+            });
+        };
+
+        const getSubjectIcon = (subject) => {
+            const key = subject.toLowerCase();
+            return subjectIcons[key] || subjectIcons['default'];
+        };
+
+        const createPlanCard = (plan) => {
+            const card = document.createElement('div');
+            card.className = "bg-gray-50 border border-gray-200 rounded-lg p-4 cursor-pointer hover:bg-gray-100 transition-colors";
+            
+            const statusColor = plan.status === 'Reviewed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800';
+            const statusText = plan.status === 'Reviewed' ? 'Reviewed' : 'Submitted';
+            
+            // Determine if the "Edit" and "Evaluate" buttons should be shown
+            const showEditBtn = plan.userId === currentUserId && !isHod;
+            const showEvaluateBtn = plan.userId === currentUserId && !plan.evaluation;
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h3 class="text-xl font-semibold text-gray-800 flex items-center gap-2">
+                            <span class="text-2xl">${getSubjectIcon(plan.teacherSubject)}</span>
+                            ${plan.teacherSubject}: ${plan.title}
+                        </h3>
+                        <p class="text-gray-600 mt-1">Submitted by: ${plan.teacherName}</p>
+                    </div>
+                    <div class="flex-shrink-0 text-right space-y-2">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}">
+                            ${statusText}
+                        </span>
+                        ${showEditBtn ? `
+                            <button class="edit-btn block text-xs bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-1 px-3 rounded-lg transition-colors">
+                                Edit
+                            </button>
+                        ` : ''}
+                         ${showEvaluateBtn ? `
+                            <button class="evaluate-btn block text-xs bg-purple-200 hover:bg-purple-300 text-purple-800 font-bold py-1 px-3 rounded-lg transition-colors">
+                                Evaluate
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            
+            card.addEventListener('click', (e) => {
+                if (e.target.classList.contains('edit-btn')) {
+                    e.stopPropagation();
+                    state.view = 'submit';
+                    state.selectedPlanId = plan.id;
+                    render();
+                } else if (e.target.classList.contains('evaluate-btn')) {
+                    e.stopPropagation();
+                    state.view = 'evaluate';
+                    state.selectedPlanId = plan.id;
+                    render();
+                } else {
+                    state.view = 'viewPlan';
+                    state.selectedPlanId = plan.id;
+                    render();
+                }
+            });
+            return card;
+        };
+        
+        const renderSubmitForm = async () => {
+            let planToEdit = null;
+            if (state.selectedPlanId) {
+                // Fetch existing plan data for editing
+                const planRef = doc(getLessonPlansCollectionRef(), state.selectedPlanId);
+                const planSnap = await getDoc(planRef);
+                if (planSnap.exists()) {
+                    planToEdit = planSnap.data();
+                } else {
+                    console.error("Plan not found for editing.");
+                    state.selectedPlanId = null;
+                    state.view = 'dashboard';
+                    render();
+                    return;
+                }
+            }
+
+            contentContainerEl.innerHTML = `
+                <div class="space-y-4">
+                    <h2 class="text-3xl font-bold text-gray-700">${planToEdit ? 'Edit Lesson Plan' : 'Submit New Lesson Plan'}</h2>
+                    <form id="submit-form" class="space-y-4">
+                        <div>
+                            <label for="teacherName" class="block text-sm font-medium text-gray-700">Teacher's Name</label>
+                            <input type="text" id="teacherName" name="teacherName" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="${planToEdit ? planToEdit.teacherName : ''}">
+                        </div>
+                        <div>
+                            <label for="teacherSubject" class="block text-sm font-medium text-gray-700">Subject</label>
+                            <input type="text" id="teacherSubject" name="teacherSubject" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="${planToEdit ? planToEdit.teacherSubject : ''}">
+                        </div>
+                         <div>
+                            <label for="title" class="block text-sm font-medium text-gray-700">Lesson Plan Title</label>
+                            <input type="text" id="title" name="title" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value="${planToEdit ? planToEdit.title : ''}">
+                        </div>
+                        <div>
+                            <label for="editor-container" class="block text-sm font-medium text-gray-700">Lesson Plan Content</label>
+                            <div id="editor-container"></div>
+                        </div>
+                        <button type="submit" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                            ${planToEdit ? 'Save Changes' : 'Submit Lesson Plan'}
+                        </button>
+                    </form>
+                    <button id="back-to-dashboard-btn" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg transition-colors">
+                        Back to Dashboard
+                    </button>
+                </div>
+            `;
+            document.getElementById('back-to-dashboard-btn').addEventListener('click', () => {
+                state.view = 'dashboard';
+                state.selectedPlanId = null; // Clear state on back button
+                render();
+            });
+
+            const toolbarOptions = [
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
+                [{ 'color': [] }, { 'background': [] }],
+                ['link', 'image', 'video'],
+                ['clean']
+            ];
+            
+            // Check if Quill is available globally before initializing
+            if (typeof Quill === 'undefined') {
+                console.error('Quill is not loaded. Please check the Quill CDN script tag.');
+                return;
+            }
+
+            quillEditor = new Quill('#editor-container', {
+                modules: {
+                    toolbar: toolbarOptions
+                },
+                theme: 'snow'
+            });
+
+            // Set content for editing
+            if (planToEdit) {
+                quillEditor.root.innerHTML = planToEdit.content;
+            }
+
+            // Handle image uploads
+            quillEditor.getModule('toolbar').addHandler('image', () => {
+                const input = document.createElement('input');
+                input.setAttribute('type', 'file');
+                input.setAttribute('accept', 'image/*');
+                input.click();
+
+                input.onchange = async () => {
+                    const file = input.files[0];
+                    if (file) {
+                        try {
+                            const storageRef = ref(storage, `images/${currentUserId}/${Date.now()}-${file.name}`);
+                            const snapshot = await uploadBytes(storageRef, file);
+                            const downloadURL = await getDownloadURL(snapshot.ref);
+
+                            const range = quillEditor.getSelection();
+                            quillEditor.insertEmbed(range.index, 'image', downloadURL);
+                        } catch (e) {
+                            console.error("Error uploading image:", e);
+                        }
+                    }
+                };
+            });
+
+            document.getElementById('submit-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const newPlan = {
+                    teacherName: form.teacherName.value,
+                    teacherSubject: form.teacherSubject.value,
+                    title: form.title.value,
+                    content: quillEditor.root.innerHTML,
+                    userId: currentUserId,
+                    timestamp: serverTimestamp()
+                };
+
+                try {
+                    if (state.selectedPlanId) {
+                        // Update existing document
+                        await updateDoc(doc(getLessonPlansCollectionRef(), state.selectedPlanId), newPlan);
+                    } else {
+                        // Add new document
+                        await addDoc(getLessonPlansCollectionRef(), { ...newPlan, status: 'Submitted', feedback: null });
+                    }
+                    state.view = 'dashboard';
+                    state.selectedPlanId = null; // Clear state on successful submission
+                    render();
+                } catch (error) {
+                    console.error("Error adding/updating document: ", error);
+                }
+            });
+        };
+
+        const renderEvaluationForm = async () => {
+            if (!state.selectedPlanId) {
+                state.view = 'dashboard';
+                render();
+                return;
+            }
+
+            const planRef = doc(getLessonPlansCollectionRef(), state.selectedPlanId);
+            const planSnap = await getDoc(planRef);
+            const planToEvaluate = planSnap.data();
+
+            contentContainerEl.innerHTML = `
+                <div class="space-y-4">
+                    <h2 class="text-3xl font-bold text-gray-700">Lesson Evaluation: ${planToEvaluate.title}</h2>
+                    <p class="text-gray-600">Please provide a self-evaluation of your lesson plan's effectiveness, student engagement, and any challenges you encountered.</p>
+                    <form id="evaluation-form" class="space-y-4">
+                        <div>
+                            <label for="evaluation-content" class="block text-sm font-medium text-gray-700">Your Evaluation</label>
+                            <textarea id="evaluation-content" name="evaluation" rows="10" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        </div>
+                        <button type="submit" class="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                            Submit Evaluation
+                        </button>
+                    </form>
+                    <button id="back-to-dashboard-btn" class="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-6 rounded-lg transition-colors">
+                        Back to Dashboard
+                    </button>
+                </div>
+            `;
+
+            document.getElementById('back-to-dashboard-btn').addEventListener('click', () => {
+                state.view = 'dashboard';
+                render();
+            });
+
+            document.getElementById('evaluation-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const evaluationContent = document.getElementById('evaluation-content').value;
+                try {
+                    await updateDoc(planRef, {
+                        evaluation: {
+                            content: evaluationContent,
+                            hodEvaluationFeedback: null,
+                            status: 'Submitted'
+                        }
+                    });
+                    state.view = 'dashboard';
+                    render();
+                } catch (error) {
+                    console.error("Error submitting evaluation: ", error);
+                }
+            });
+        };
+
+        const renderViewPlan = () => {
+            if (!state.selectedPlanId) {
+                state.view = 'dashboard';
+                render();
+                return;
+            }
+
+            contentContainerEl.innerHTML = `
+                <div id="plan-view-container" class="space-y-4">
+                    <button id="back-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg transition-colors">
+                        &larr; Back to Dashboard
+                    </button>
+                    <div id="plan-details" class="bg-gray-50 border border-gray-200 rounded-lg p-6 space-y-4">
+                        <h2 id="plan-title" class="text-3xl font-bold text-gray-700"></h2>
+                        <div class="text-sm text-gray-500">
+                            By <span id="plan-author"></span> on <span id="plan-date"></span>
+                        </div>
+                        <div id="plan-content" class="mt-4 text-gray-800"></div>
+                    </div>
+
+                    <!-- Lesson Evaluation Section -->
+                    <div id="evaluation-section" class="bg-gray-50 border border-gray-200 rounded-lg p-6 space-y-4">
+                        <h3 class="text-2xl font-bold text-gray-700">Lesson Evaluation</h3>
+                        <div id="evaluation-content-display"></div>
+                    </div>
+                    
+                    ${isHod ? `
+                        <!-- HOD Feedback Forms -->
+                        <div id="feedback-sections-container" class="space-y-6">
+                            <!-- Feedback on Lesson -->
+                            <div class="space-y-4">
+                                <h3 class="text-2xl font-semibold text-gray-700">Feedback on Lesson</h3>
+                                <form id="lesson-feedback-form" class="space-y-4">
+                                    <textarea id="lesson-feedback-content" name="lessonFeedback" rows="5" placeholder="Enter your feedback on the lesson plan here..." class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                                    <button type="submit" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                                        Submit Lesson Feedback
+                                    </button>
+                                </form>
+                            </div>
+                            <!-- Feedback on Evaluation (conditional) -->
+                            <div id="evaluation-feedback-container" class="space-y-4 hidden">
+                                <h3 class="text-2xl font-semibold text-gray-700">Feedback on Evaluation</h3>
+                                <form id="evaluation-feedback-form" class="space-y-4">
+                                    <textarea id="evaluation-feedback-content" name="evaluationFeedback" rows="5" placeholder="Enter your feedback on the teacher's self-evaluation here..." class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                                    <button type="submit" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                                        Submit Evaluation Feedback
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    ` : `
+                        <!-- Teacher's View of HOD Feedback -->
+                        <div class="space-y-6">
+                            <!-- Feedback on Lesson -->
+                            <div class="space-y-4">
+                                <h3 class="text-2xl font-semibold text-gray-700">HOD Feedback on Lesson</h3>
+                                <div id="lesson-feedback-display" class="bg-white border border-gray-200 rounded-lg p-6 text-gray-800">No feedback has been provided yet.</div>
+                            </div>
+                            <!-- Feedback on Evaluation (conditional) -->
+                            <div id="evaluation-feedback-display-container" class="space-y-4 hidden">
+                                <h3 class="text-2xl font-semibold text-gray-700">HOD Feedback on Evaluation</h3>
+                                <div id="evaluation-feedback-display" class="bg-white border border-gray-200 rounded-lg p-6 text-gray-800">The HOD has not provided feedback on your evaluation yet.</div>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            `;
+            document.getElementById('back-btn').addEventListener('click', () => {
+                state.view = 'dashboard';
+                state.selectedPlanId = null; // Clear state on back button
+                render();
+            });
+
+            // Listen for real-time updates on the selected lesson plan
+            const planRef = doc(getLessonPlansCollectionRef(), state.selectedPlanId);
+            onSnapshot(planRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const plan = docSnap.data();
+                    document.getElementById('plan-title').textContent = `${plan.teacherSubject}: ${plan.title}`;
+                    document.getElementById('plan-author').textContent = plan.teacherName;
+                    document.getElementById('plan-date').textContent = new Date(plan.timestamp.toDate()).toLocaleDateString();
+                    
+                    // Display rich text content
+                    document.getElementById('plan-content').innerHTML = plan.content;
+
+                    // Render evaluation content
+                    const evaluationDisplayEl = document.getElementById('evaluation-content-display');
+                    if (plan.evaluation && plan.evaluation.content) {
+                        evaluationDisplayEl.innerHTML = `<p class="text-gray-800">${plan.evaluation.content}</p>`;
+                        evaluationDisplayEl.classList.remove('italic');
+                    } else {
+                        evaluationDisplayEl.innerHTML = `<p class="text-gray-500 italic">No evaluation has been submitted yet.</p>`;
+                        if (plan.userId === currentUserId && !isHod) {
+                            evaluationDisplayEl.innerHTML += `<button id="submit-evaluation-btn" class="mt-4 bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Submit Evaluation</button>`;
+                            document.getElementById('submit-evaluation-btn').addEventListener('click', () => {
+                                state.view = 'evaluate';
+                                render();
+                            });
+                        }
+                    }
+
+                    if (isHod) {
+                        const lessonFeedbackEl = document.getElementById('lesson-feedback-content');
+                        if (lessonFeedbackEl) {
+                            lessonFeedbackEl.value = plan.hodLessonFeedback || '';
+                        }
+                        const evalFeedbackContainer = document.getElementById('evaluation-feedback-container');
+                        if (plan.evaluation) {
+                            evalFeedbackContainer.classList.remove('hidden');
+                            const evalFeedbackEl = document.getElementById('evaluation-feedback-content');
+                            if (evalFeedbackEl) {
+                                evalFeedbackEl.value = plan.evaluation.hodEvaluationFeedback || '';
+                            }
+                        } else {
+                            evalFeedbackContainer.classList.add('hidden');
+                        }
+                    } else {
+                        const lessonFeedbackDisplayEl = document.getElementById('lesson-feedback-display');
+                        if (lessonFeedbackDisplayEl) {
+                            lessonFeedbackDisplayEl.textContent = plan.hodLessonFeedback || 'No feedback has been provided yet.';
+                        }
+                        const evalFeedbackContainer = document.getElementById('evaluation-feedback-display-container');
+                        if (plan.evaluation) {
+                            evalFeedbackContainer.classList.remove('hidden');
+                            const evalFeedbackDisplayEl = document.getElementById('evaluation-feedback-display');
+                            if (evalFeedbackDisplayEl) {
+                                evalFeedbackDisplayEl.textContent = plan.evaluation.hodEvaluationFeedback || 'The HOD has not provided feedback on your evaluation yet.';
+                            }
+                        } else {
+                            evalFeedbackContainer.classList.add('hidden');
+                        }
+                    }
+                } else {
+                    console.log("No such document!");
+                    state.view = 'dashboard';
+                    state.selectedPlanId = null;
+                    render();
+                }
+            });
+
+            if (isHod) {
+                document.getElementById('lesson-feedback-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const feedback = document.getElementById('lesson-feedback-content').value;
+                    const planRef = doc(getLessonPlansCollectionRef(), state.selectedPlanId);
+                    try {
+                        await updateDoc(planRef, {
+                            hodLessonFeedback: feedback,
+                            status: 'Reviewed'
+                        });
+                        console.log("Lesson feedback submitted successfully!");
+                    } catch (error) {
+                        console.error("Error updating document: ", error);
+                    }
+                });
+
+                document.getElementById('evaluation-feedback-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const feedback = document.getElementById('evaluation-feedback-content').value;
+                    const planRef = doc(getLessonPlansCollectionRef(), state.selectedPlanId);
+                    const planSnap = await getDoc(planRef);
+                    if (planSnap.exists() && planSnap.data().evaluation) {
+                        try {
+                            await updateDoc(planRef, {
+                                'evaluation.hodEvaluationFeedback': feedback
+                            });
+                            console.log("Evaluation feedback submitted successfully!");
+                        } catch (error) {
+                            console.error("Error updating document: ", error);
+                        }
+                    } else {
+                        console.error("Cannot submit feedback on a lesson without an evaluation.");
+                    }
+                });
+            }
+        };
+
+        // Initial setup call
+        setupAuthAndRender();
+    </script>
+    <!-- Quill Rich Text Editor CDN from a more reliable CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.6/quill.min.js"></script>
+</body>
+</html>
