@@ -991,9 +991,9 @@
                     const plan = docSnap.data();
                     document.getElementById('plan-title').textContent = `${plan.teacherSubject}: ${plan.title}`;
                     document.getElementById('plan-author').textContent = plan.teacherName;
-                    document.getElementById('plan-date-submitted').textContent = new Date(plan.timestamp.toDate()).toLocaleDateString();
+                    const submitted = plan.timestamp?.toDate?.() ?? docSnap.createTime?.toDate?.();
+                    document.getElementById('plan-date-submitted').textContent = submitted ? submitted.toLocaleDateString() : '—';
                     document.getElementById('lesson-date').textContent = `Lesson Date: ${formatLessonDate(plan.lessonDate)}`;
-                    
                     // Display rich text content
                     document.getElementById('plan-content').innerHTML = plan.content;
 
