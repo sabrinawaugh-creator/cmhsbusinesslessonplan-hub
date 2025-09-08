@@ -374,13 +374,13 @@
             const listEl = document.getElementById('lesson-plans-list');
             if (!listEl) return;
 
-            const lowerQuery = query.toLowerCase();
-            state.filteredPlans = state.lessonPlans.filter(plan =>
-                plan.title.toLowerCase().includes(lowerQuery) ||
-                plan.teacherName.toLowerCase().includes(lowerQuery) ||
-                plan.teacherSubject.toLowerCase().includes(lowerQuery)
-            );
-
+            const lowerQuery = (query || '').toLowerCase();
+            state.filteredPlans = state.lessonPlans.filter(plan => {
+                const t = (plan.title || '').toLowerCase();
+                const n = (plan.teacherName || '').toLowerCase();
+                const s = (plan.teacherSubject || '').toLowerCase();
+                return t.includes(lowerQuery) || n.includes(lowerQuery) || s.includes(lowerQuery);
+            });
             listEl.innerHTML = ''; // Clear previous list
             if (state.filteredPlans.length === 0) {
                 listEl.innerHTML = `<p class="text-gray-500">No matching lesson plans found.</p>`;
