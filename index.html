@@ -429,31 +429,93 @@
 
         const renderHodDashboard = () => {
             contentContainerEl.innerHTML = `
-                <div class="space-y-4">
-                    <h2 class="text-3xl font-bold text-gray-700">HOD Dashboard</h2>
-                    <p class="text-gray-600">Viewing all lesson plans submitted by the department.</p>
-                    <input type="text" id="search-input" placeholder="Search plans by title, teacher, or subject..." class="w-full p-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                    <div id="lesson-plans-list" class="space-y-4">
-                        <!-- Lesson plans will be loaded here -->
-                        <p class="text-gray-500">Loading lesson plans...</p>
-                    </div>
-                </div>
-            `;
-            const searchInputEl = document.getElementById('search-input');
-            searchInputEl.addEventListener('input', (e) => filterAndRenderPlans(e.target.value));
+        <div class="space-y-4">
+            <h2 class="text-3xl font-bold text-gray-700">HOD Dashboard</h2>
+            <p class="text-gray-600">Lesson plans grouped by teacher.</p>
+            <input type="text" id="search-input" placeholder="Search by title, teacher, or subject..." 
+                   class="w-full p-2 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+            <div id="lesson-plans-list" class="space-y-6">
+                <p class="text-gray-500">Loading lesson plans...</p>
+            </div>
+        </div>
+    `;
 
-            const q = query(getLessonPlansCollectionRef());
-            onSnapshot(q, (snapshot) => {
-                try {
-                    state.lessonPlans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    state.lessonPlans.sort((a, b) => b.timestamp - a.timestamp); // Sort data in memory
-                    filterAndRenderPlans(searchInputEl.value);
-                } catch (e) {
-                    console.error("Error fetching lesson plans: ", e);
-                    document.getElementById('lesson-plans-list').innerHTML = `<p class="text-red-500">An error occurred while loading lesson plans.</p>`;
-                }
+    const searchInputEl = document.getElementById('search-input');
+    const plansListEl = document.getElementById('lesson-plans-list');
+
+    const renderGroupedPlans = (plans) => {
+        plansListEl.innerHTML = '';
+
+        // Group plans by teacher name
+        const grouped = {};
+        plans.forEach(plan => {
+            if (!grouped[plan.teacherName]) grouped[plan.teacherName] = [];
+            grouped[plan.teacherName].push(plan);
+        });
+
+        Object.keys(grouped).forEach(teacherName => {
+            const teacherSection = document.createElement('div');
+            teacherSection.className = "border border-gray-300 rounded-lg bg-white shadow-sm overflow-hidden";
+
+            const header = document.createElement('button');
+            header.className = "w-full flex justify-between items-center px-4 py-3 text-left text-lg font-semibold text-gray-800 bg-gray-100 hover:bg-gray-200 transition-colors";
+            header.innerHTML = `
+                <span>${teacherName}</span>
+                <svg class="w-5 h-5 transform transition-transform duration-200 rotate-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+            `;
+
+            const planList = document.createElement('div');
+            planList.className = "space-y-3 p-4 hidden"; // initially collapsed
+
+            grouped[teacherName].forEach(plan => {
+                const planCard = createPlanCard(plan);
+                planList.appendChild(planCard);
             });
-        };
+
+            // Toggle collapse/expand
+            header.addEventListener('click', () => {
+                const icon = header.querySelector('svg');
+                const isCollapsed = planList.classList.contains('hidden');
+                planList.classList.toggle('hidden');
+                icon.classList.toggle('rotate-180', isCollapsed);
+            });
+
+            teacherSection.appendChild(header);
+            teacherSection.appendChild(planList);
+            plansListEl.appendChild(teacherSection);
+        });
+
+        if (Object.keys(grouped).length === 0) {
+            plansListEl.innerHTML = `<p class="text-gray-500">No matching lesson plans found.</p>`;
+        }
+    };
+
+    // Search bar listener
+    searchInputEl.addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase();
+        const filtered = state.lessonPlans.filter(plan =>
+            plan.title.toLowerCase().includes(q) ||
+            plan.teacherName.toLowerCase().includes(q) ||
+            plan.teacherSubject.toLowerCase().includes(q)
+        );
+        renderGroupedPlans(filtered);
+    });
+
+    // Firestore real-time listener
+    const q = query(getLessonPlansCollectionRef());
+    onSnapshot(q, (snapshot) => {
+        try {
+            state.lessonPlans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            state.lessonPlans.sort((a, b) => b.timestamp - a.timestamp);
+            renderGroupedPlans(state.lessonPlans);
+        } catch (e) {
+            console.error("Error fetching lesson plans: ", e);
+            plansListEl.innerHTML = `<p class="text-red-500">An error occurred while loading lesson plans.</p>`;
+        }
+    });
+};
 
         const renderTeacherDashboard = () => {
             contentContainerEl.innerHTML = `
